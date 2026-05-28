@@ -1,6 +1,5 @@
 import { createContext, useContext, useState, useEffect } from 'react';
 import api from '../services/api';
-import { autoStartConverters, stopAllConverters } from '../services/converter';
 
 const AuthContext = createContext(null);
 
@@ -25,18 +24,6 @@ export function AuthProvider({ children }) {
     }
   }, []);
 
-  // Restore each converter job (QR / Convert Label) based on the user's last
-  // saved auto preference. Stopping is a soft-stop on logout so the next
-  // login can resume whichever jobs were on.
-  useEffect(() => {
-    if (user && user.convert) {
-      autoStartConverters();
-    } else {
-      stopAllConverters();
-    }
-    return () => stopAllConverters();
-  }, [user?.id, user?.convert]);
-
   const login = async (email, password) => {
     const res = await api.post('/login', { email, password });
     const { token, user } = res.data;
@@ -50,7 +37,6 @@ export function AuthProvider({ children }) {
     try { await api.post('/logout'); } catch {}
     localStorage.removeItem('token');
     localStorage.removeItem('user');
-    stopAllConverters();
     setUser(null);
   };
 

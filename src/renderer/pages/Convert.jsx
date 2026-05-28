@@ -1,155 +1,100 @@
-import { useEffect, useState } from 'react';
-import {
-  subscribeQrConverter,
-  startQrConverter,
-  stopQrConverter,
-  pauseQrConverter,
-  resumeQrConverter,
-  runQrNow,
-} from '../services/converter';
-import { useAuth } from '../contexts/AuthContext';
+import { useEffect, useRef, useState } from 'react';
+import api from '../services/api';
+import { runConvertPass } from '../services/mediaConverter';
+import { notify } from '../components/Dialog';
 
-const LEVEL_COLOR = {
-  info: 'text-neutral-500',
-  ok: 'text-green-600',
-  error: 'text-red-500',
-};
-
-function fmt(ts) {
-  if (!ts) return '-';
-  const d = new Date(ts);
-  return d.toLocaleTimeString();
-}
+const AUTO_KEY = 'media_convert_auto_interval'; // 'off' | '1m' | '5m'
 
 export default function Convert() {
-  const { user } = useAuth();
-  const [s, setS] = useState(null);
+  const [pendingCount, setPendingCount] = useState(null);
+  const [running, setRunning] = useState(false);
+  const [progress, setProgress] = useState(null);
+  const [log, setLog] = useState([]);
+  const [auto, setAuto] = useState(() => localStorage.getItem(AUTO_KEY) || 'off');
+  const timerRef = useRef(null);
+  const runningRef = useRef(false);
 
-  useEffect(() => subscribeQrConverter(setS), []);
+  const pushLog = (msg, kind = 'info') =>
+    setLog(prev => [{ at: new Date(), msg, kind }, ...prev].slice(0, 100));
 
-  if (!user?.convert) {
-    return (
-      <div className="p-6">
-        <h2 className="text-xl font-bold text-neutral-800 mb-2">Convert</h2>
-        <p className="text-sm text-neutral-500">
-          Convert mode is not enabled for your account. Ask an admin to turn it on in Users.
-        </p>
-      </div>
-    );
-  }
-  if (!s) return <div className="p-6 text-neutral-400">Loading…</div>;
+  const refreshPending = () => {
+    api.get('/designs/pending-convert', { params: { per_page: 1 } })
+      .then(res => setPendingCount(res.data.total ?? (res.data.data || []).length))
+      .catch(() => {});
+  };
+  useEffect(refreshPending, []);
 
-  const statusBadge = !s.enabled
-    ? { label: 'Off', cls: 'bg-neutral-100 text-neutral-500' }
-    : s.paused
-    ? { label: 'Paused', cls: 'bg-yellow-100 text-yellow-600' }
-    : s.running
-    ? { label: 'Running', cls: 'bg-blue-100 text-blue-600' }
-    : { label: 'Idle', cls: 'bg-green-100 text-green-600' };
+  const run = async (silent = false) => {
+    if (runningRef.current) return;
+    runningRef.current = true;
+    setRunning(true);
+    setProgress({ done: 0, total: 0 });
+    try {
+      const res = await runConvertPass((p) => {
+        setProgress({ done: p.done, total: p.total });
+        if (p.message) pushLog(p.message);
+      });
+      pushLog(`Pass xong: ${res.ok} ok, ${res.failed} fail / ${res.total}`, res.failed ? 'error' : 'ok');
+      if (res.errors.length) res.errors.forEach(e => pushLog(e, 'error'));
+      if (!silent) notify(`Convert: ${res.ok}/${res.total} ok${res.failed ? `, ${res.failed} fail` : ''}`, { title: 'Convert _qr', kind: res.failed ? 'warning' : 'success' });
+    } catch (err) {
+      pushLog(err.message || 'Convert failed', 'error');
+      if (!silent) notify(err.message || 'Convert failed', { title: 'Convert _qr', kind: 'error' });
+    } finally {
+      setRunning(false);
+      runningRef.current = false;
+      setProgress(null);
+      refreshPending();
+    }
+  };
+
+  // Auto interval (per-device, while window open).
+  useEffect(() => {
+    if (timerRef.current) clearInterval(timerRef.current);
+    if (auto === 'off') return;
+    const ms = { '1m': 60_000, '5m': 5 * 60_000 }[auto];
+    if (!ms) return;
+    timerRef.current = setInterval(() => run(true), ms);
+    return () => clearInterval(timerRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [auto]);
+
+  const setAutoInterval = (v) => { setAuto(v); localStorage.setItem(AUTO_KEY, v); };
 
   return (
-    <div className="p-6">
-      <div className="flex justify-between items-center mb-4">
+    <div className="p-6 space-y-4">
+      <div className="flex justify-between items-center">
         <div>
-          <h2 className="text-xl font-bold text-neutral-800">Convert</h2>
-          <p className="text-xs text-neutral-500 mt-1">
-            Background QR-overlay job for order item metas. Runs every 60s while you're logged in.
-            Auto state persists across logins.
-          </p>
+          <h2 className="text-xl font-bold text-neutral-800">Convert _qr</h2>
+          <p className="text-xs text-neutral-500 mt-1">Build QR overlay cho các design chưa convert, upload B2, lưu link _qr.</p>
         </div>
-        <div className="flex items-center gap-2">
-          <span className={`px-2 py-1 rounded text-xs font-medium ${statusBadge.cls}`}>{statusBadge.label}</span>
-          {!s.enabled ? (
-            <button onClick={startQrConverter} className="px-3 py-1.5 bg-green-500 hover:bg-green-600 text-white text-sm rounded-lg">Start auto</button>
-          ) : (
-            <button onClick={stopQrConverter} className="px-3 py-1.5 bg-neutral-200 hover:bg-neutral-300 text-neutral-700 text-sm rounded-lg">Stop auto</button>
-          )}
-          <button
-            onClick={runQrNow}
-            disabled={s.running || s.paused || !s.enabled}
-            className="px-3 py-1.5 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white text-sm rounded-lg"
-          >Run now</button>
-          {s.enabled && (
-            s.paused
-              ? <button onClick={resumeQrConverter} className="px-3 py-1.5 bg-green-500 hover:bg-green-600 text-white text-sm rounded-lg">Resume</button>
-              : <button onClick={pauseQrConverter} className="px-3 py-1.5 bg-yellow-500 hover:bg-yellow-600 text-white text-sm rounded-lg">Pause</button>
-          )}
+        <div className="flex items-center gap-3">
+          <span className="text-sm text-neutral-600">Pending: <b className="text-orange-600">{pendingCount ?? '…'}</b></span>
+          <select value={auto} onChange={e => setAutoInterval(e.target.value)} className="px-2 py-1.5 bg-white border border-neutral-200 rounded text-sm">
+            <option value="off">Auto: Off</option>
+            <option value="1m">Auto: 1 phút</option>
+            <option value="5m">Auto: 5 phút</option>
+          </select>
+          <button onClick={() => run(false)} disabled={running} className="px-4 py-2 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white text-sm rounded-lg font-medium">
+            {running ? (progress ? `Converting ${progress.done}/${progress.total}…` : 'Converting…') : 'Run convert now'}
+          </button>
         </div>
       </div>
 
-      {/* Stats */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-6">
-        <Stat label="Pending" value={s.pendingCount} hint="Metas waiting to convert" tone="text-orange-600" />
-        <Stat label="Processed" value={s.processedTotal} hint="Successful uploads since login" tone="text-green-600" />
-        <Stat label="Errors" value={s.errorTotal} hint="Failed conversions since login" tone="text-red-500" />
-        <Stat label="Last poll" value={fmt(s.lastTickAt)} hint={s.nextTickAt ? `Next ~${fmt(s.nextTickAt)}` : '—'} tone="text-neutral-700" />
-      </div>
+      {auto !== 'off' && <p className="text-[11px] text-amber-700">⚠ Auto chỉ chạy khi cửa sổ app đang mở.</p>}
 
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Pending queue */}
-        <div className="bg-white rounded-xl border border-neutral-200 shadow-sm">
-          <div className="px-4 py-3 border-b border-neutral-100 flex justify-between items-center">
-            <h3 className="text-sm font-semibold text-neutral-700">Queue ({s.pendingCount})</h3>
-          </div>
-          <div className="max-h-[420px] overflow-y-auto">
-            {s.pending.length === 0 ? (
-              <p className="text-xs text-neutral-400 p-4">Queue is empty.</p>
-            ) : (
-              <table className="w-full text-xs">
-                <thead className="text-neutral-500 bg-[#faf8f6]">
-                  <tr>
-                    <th className="text-left px-3 py-2">System ID</th>
-                    <th className="text-left px-3 py-2">Key</th>
-                    <th className="text-left px-3 py-2">Source</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {s.pending.map((p, i) => (
-                    <tr key={`qr-${p.order_item_id}-${p.target_key}-${i}`} className="border-t border-neutral-50">
-                      <td className="px-3 py-2 font-mono text-orange-500">{p.system_id}</td>
-                      <td className="px-3 py-2 text-neutral-700">{p.target_key}</td>
-                      <td className="px-3 py-2 text-neutral-500 truncate max-w-[260px]">{p.value}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            )}
-          </div>
-        </div>
-
-        {/* Log */}
-        <div className="bg-white rounded-xl border border-neutral-200 shadow-sm">
-          <div className="px-4 py-3 border-b border-neutral-100 flex justify-between items-center">
-            <h3 className="text-sm font-semibold text-neutral-700">Activity log</h3>
-            <span className="text-xs text-neutral-400">last {s.log.length}</span>
-          </div>
-          <div className="max-h-[420px] overflow-y-auto p-2 font-mono text-[11px] leading-5">
-            {s.log.length === 0 ? (
-              <p className="text-neutral-400 p-2">No activity yet.</p>
-            ) : (
-              s.log.map((e, i) => (
-                <div key={i} className="flex gap-2 px-2 py-0.5 hover:bg-neutral-50 rounded">
-                  <span className="text-neutral-400 shrink-0 w-16">{fmt(e.ts)}</span>
-                  <span className={`shrink-0 w-12 ${LEVEL_COLOR[e.level] || 'text-neutral-500'}`}>{e.level}</span>
-                  {e.system_id && <span className="text-orange-500 shrink-0">{e.system_id}</span>}
-                  {e.key && <span className="text-neutral-500 shrink-0">/{e.key}</span>}
-                  <span className="text-neutral-700 truncate">{e.message}</span>
-                </div>
-              ))
-            )}
-          </div>
+      <div className="bg-white rounded-xl border border-neutral-200 shadow-sm overflow-hidden">
+        <div className="px-4 py-2 text-sm font-semibold text-neutral-700 border-b border-neutral-100 bg-[#faf8f6]">Log</div>
+        <div className="max-h-[60vh] overflow-y-auto text-xs font-mono">
+          {log.length === 0 ? (
+            <p className="p-4 text-neutral-400">Chưa chạy lần nào.</p>
+          ) : log.map((l, i) => (
+            <div key={i} className={`px-4 py-1 border-b border-neutral-50 ${l.kind === 'error' ? 'text-red-500' : l.kind === 'ok' ? 'text-green-600' : 'text-neutral-600'}`}>
+              <span className="text-neutral-400">{l.at.toLocaleTimeString()}</span> · {l.msg}
+            </div>
+          ))}
         </div>
       </div>
-    </div>
-  );
-}
-
-function Stat({ label, value, hint, tone }) {
-  return (
-    <div className="bg-white rounded-xl border border-neutral-200 p-4 shadow-sm">
-      <div className="text-xs text-neutral-500">{label}</div>
-      <div className={`text-xl font-bold ${tone || 'text-neutral-800'}`}>{value}</div>
-      {hint && <div className="text-[11px] text-neutral-400 mt-0.5">{hint}</div>}
     </div>
   );
 }

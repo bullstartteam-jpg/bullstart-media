@@ -1,9 +1,8 @@
 import axios from 'axios';
 
-// bullstart-media talks to the LOCAL hub (D:\bs\hubbullstart on :8000) by
-// default — the media team works against a local database, not production.
-// Override at runtime via the login screen's API URL field if needed.
-const DEFAULT_API_URL = 'http://localhost:8000/api';
+// bullstart-media has its OWN backend (hubmedia) + DB, separate from the
+// main hub. Local default :8001. Override via login screen API URL field.
+const DEFAULT_API_URL = 'http://localhost:8001/api';
 
 const API_URL = localStorage.getItem('api_url') || DEFAULT_API_URL;
 
