@@ -11,6 +11,22 @@ const STATUS_BADGE = {
   ganged:    'bg-neutral-200 text-neutral-600',
 };
 
+// Inline thumbnail — click to open the full preview. Falls back to a dash
+// when there's no URL and a broken-image marker if the URL fails to load.
+function Thumb({ url, onOpen }) {
+  if (!url) return <span className="text-neutral-300">—</span>;
+  return (
+    <img
+      src={url}
+      alt=""
+      onClick={() => onOpen(url)}
+      loading="lazy"
+      className="inline-block h-12 w-12 object-cover rounded border border-neutral-200 cursor-pointer hover:ring-2 hover:ring-orange-300"
+      onError={(e) => { e.currentTarget.style.display = 'none'; }}
+    />
+  );
+}
+
 export default function Design() {
   const [form, setForm] = useState({ code: '', name: '', front_url: '', back_url: '' });
   const [saving, setSaving] = useState(false);
@@ -123,10 +139,13 @@ export default function Design() {
               <tr key={d.id} className="border-b border-neutral-100 hover:bg-orange-50/30">
                 <td className="px-3 py-1.5 font-mono text-orange-600 text-xs">{d.code}</td>
                 <td className="px-3 py-1.5 text-neutral-700">{d.name || '-'}</td>
-                <td className="px-3 py-1.5 text-center">{d.front_url ? <button onClick={() => setPreviewUrl(d.front_url)} className="text-xs text-blue-600 hover:underline">view</button> : <span className="text-neutral-300">—</span>}</td>
-                <td className="px-3 py-1.5 text-center">{d.back_url ? <button onClick={() => setPreviewUrl(d.back_url)} className="text-xs text-blue-600 hover:underline">view</button> : <span className="text-neutral-300">—</span>}</td>
-                <td className="px-3 py-1.5 text-center text-xs">
-                  {d.front_qr || d.back_qr ? <span className="text-green-600">✓</span> : <span className="text-neutral-300">—</span>}
+                <td className="px-3 py-1.5 text-center"><Thumb url={d.front_url} onOpen={setPreviewUrl} /></td>
+                <td className="px-3 py-1.5 text-center"><Thumb url={d.back_url} onOpen={setPreviewUrl} /></td>
+                <td className="px-3 py-1.5">
+                  <div className="flex gap-1 justify-center">
+                    <Thumb url={d.front_qr} onOpen={setPreviewUrl} />
+                    <Thumb url={d.back_qr} onOpen={setPreviewUrl} />
+                  </div>
                 </td>
                 <td className="px-3 py-1.5"><span className={`px-2 py-0.5 rounded text-xs font-medium ${STATUS_BADGE[d.status] || 'bg-neutral-100 text-neutral-500'}`}>{d.status}</span></td>
                 <td className="px-3 py-1.5 text-xs text-neutral-500">{new Date(d.created_at).toLocaleString()}</td>
