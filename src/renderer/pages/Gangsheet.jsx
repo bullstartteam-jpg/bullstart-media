@@ -31,7 +31,6 @@ function TabBtn({ active, onClick, children }) {
 function ComposeTab() {
   const [pending, setPending] = useState([]);
   const [selected, setSelected] = useState(new Set());
-  const [columns, setColumns] = useState(3);
   const [loading, setLoading] = useState(true);
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState(null);
@@ -61,7 +60,6 @@ function ComposeTab() {
     setProgress({ done: 0, total: 0 });
     try {
       const built = await buildMediaGangsheet(designs, {
-        columns,
         onProgress: (p) => setProgress({ done: p.done, total: p.total }),
       });
       const filename = mediaGangsheetFilename({
@@ -94,11 +92,8 @@ function ComposeTab() {
     <div className="space-y-3">
       <div className="flex items-center gap-3 flex-wrap">
         <span className="text-sm text-neutral-600">Pending designs: <b className="text-orange-600">{pending.length}</b></span>
-        <label className="text-xs text-neutral-500 ml-auto">Columns:</label>
-        <select value={columns} onChange={e => setColumns(parseInt(e.target.value))} className="px-2 py-1 bg-white border border-neutral-200 rounded text-sm">
-          {[2,3,4,5,6].map(c => <option key={c} value={c}>{c}</option>)}
-        </select>
-        <button onClick={handleGenerate} disabled={running || selected.size === 0} className="px-4 py-2 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white text-sm rounded-lg font-medium">
+        <span className="text-[11px] text-neutral-400">1 face = 1 page (Letter landscape, design căn giữa + alignment marks)</span>
+        <button onClick={handleGenerate} disabled={running || selected.size === 0} className="px-4 py-2 bg-orange-500 hover:bg-orange-600 disabled:opacity-50 text-white text-sm rounded-lg font-medium ml-auto">
           {running ? (progress ? `Building ${progress.done}/${progress.total}…` : 'Building…') : `Generate (${selected.size})`}
         </button>
       </div>

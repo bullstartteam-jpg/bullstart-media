@@ -1,10 +1,27 @@
 import { PDFDocument } from 'pdf-lib';
 
-// ---------------------------------------------------------------------------
-// Compose selected designs' _qr faces into a single gangsheet PDF. Each face
-// (front_qr / back_qr) becomes one image placed in a grid. Images are fetched
-// via the Electron main process (bypasses B2 CORS) when available.
-// ---------------------------------------------------------------------------
+// Pixel-only layout, mirroring bullstart's gangsheetBuilder. Each design face
+// (_qr) becomes ONE full PDF page: the artwork is drawn centered on a fixed
+// 3300×2550 canvas (Letter landscape @ 300 DPI) with registration marks in
+// the margin, then the canvas is embedded as a single PNG page.
+const DPI = 300;
+const PT_PER_IN = 72;
+
+const CANVAS_W = 3300;
+const CANVAS_H = 2550;
+
+const DESIGN_W = 3000;
+const DESIGN_H = 2100;
+const DESIGN_X = (CANVAS_W - DESIGN_W) / 2;   // 150
+const DESIGN_Y = 150;                         // 0.5 in from top
+
+const MARK_GAP = 30;
+const MARK_ARM = 90;
+const MARK_THICK = 10;
+const CENTER_TICK = 70;
+
+const PAGE_W_PT = (CANVAS_W / DPI) * PT_PER_IN;   // 792
+const PAGE_H_PT = (CANVAS_H / DPI) * PT_PER_IN;   // 612
 
 function base64ToBytes(b64) {
   const bin = atob(b64);
@@ -23,20 +40,62 @@ async function fetchImageBytes(url) {
   return new Uint8Array(await res.arrayBuffer());
 }
 
-async function embedAuto(pdf, bytes) {
-  // Try PNG first, fall back to JPG.
-  try { return await pdf.embedPng(bytes); }
-  catch { return await pdf.embedJpg(bytes); }
+function loadImageFromBytes(bytes) {
+  return new Promise((resolve, reject) => {
+    const blob = new Blob([bytes]);
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => { URL.revokeObjectURL(url); resolve(img); };
+    img.onerror = (e) => { URL.revokeObjectURL(url); reject(e); };
+    img.src = url;
+  });
+}
+
+function canvasToBlob(canvas, type = 'image/png') {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob((b) => (b ? resolve(b) : reject(new Error('toBlob null'))), type);
+  });
+}
+
+// Corner L-marks + top/bottom center ticks around the design footprint.
+function drawAlignmentMarks(ctx) {
+  ctx.save();
+  ctx.fillStyle = '#000000';
+
+  const dx1 = DESIGN_X, dy1 = DESIGN_Y;
+  const dx2 = DESIGN_X + DESIGN_W, dy2 = DESIGN_Y + DESIGN_H;
+  const cx = (dx1 + dx2) / 2;
+
+  const drawCornerL = (ix, iy, sx, sy) => {
+    const hx = sx > 0 ? ix : ix - MARK_ARM;
+    const hy = sy > 0 ? iy - MARK_THICK : iy;
+    ctx.fillRect(hx, hy, MARK_ARM, MARK_THICK);
+    const vx = sx > 0 ? ix - MARK_THICK : ix;
+    const vy = sy > 0 ? iy : iy - MARK_ARM;
+    ctx.fillRect(vx, vy, MARK_THICK, MARK_ARM);
+  };
+
+  drawCornerL(dx1 - MARK_GAP, dy1 - MARK_GAP, -1, -1);
+  drawCornerL(dx2 + MARK_GAP, dy1 - MARK_GAP, +1, -1);
+  drawCornerL(dx1 - MARK_GAP, dy2 + MARK_GAP, -1, +1);
+  drawCornerL(dx2 + MARK_GAP, dy2 + MARK_GAP, +1, +1);
+
+  ctx.fillRect(cx - MARK_THICK / 2, dy1 - MARK_GAP - CENTER_TICK, MARK_THICK, CENTER_TICK);
+  ctx.fillRect(cx - MARK_THICK / 2, dy2 + MARK_GAP, MARK_THICK, CENTER_TICK);
+
+  ctx.restore();
 }
 
 /**
- * Build the gangsheet PDF.
- * @param {Array} designs  selected design rows (need front_qr / back_qr)
- * @param {{ columns?: number, onProgress?: (p)=>void }} opts
+ * Build the gangsheet PDF — one page per design face (_qr), each centered on
+ * the canvas with alignment marks. Faces are ordered front then back, design
+ * after design.
+ *
+ * @param {Array} designs  selected design rows (front_qr / back_qr)
+ * @param {{ onProgress?: (p)=>void }} opts
  * @returns {{ blob, faces, firstCode, lastCode, designIds }}
  */
-export async function buildMediaGangsheet(designs, { columns = 3, onProgress } = {}) {
-  // Flatten to a list of faces (one image per cell).
+export async function buildMediaGangsheet(designs, { onProgress } = {}) {
   const faces = [];
   for (const d of designs) {
     if (d.front_qr) faces.push({ code: d.code, url: d.front_qr });
@@ -46,45 +105,37 @@ export async function buildMediaGangsheet(designs, { columns = 3, onProgress } =
 
   const pdf = await PDFDocument.create();
 
-  // A4-ish landscape page at 150 DPI-ish; cells laid out in a grid.
-  const PAGE_W = 1748, PAGE_H = 1240;   // ~ A4 landscape @ 150dpi
-  const CELL_PAD = 12;
-  const cols = Math.max(1, columns);
-  const rows = Math.max(1, Math.floor(PAGE_H / (PAGE_W / cols))); // square-ish cells
-  const cellW = (PAGE_W - CELL_PAD * (cols + 1)) / cols;
-  const cellH = (PAGE_H - CELL_PAD * (rows + 1)) / rows;
-  const perPage = cols * rows;
+  // Reuse one canvas across all pages.
+  const canvas = document.createElement('canvas');
+  canvas.width = CANVAS_W;
+  canvas.height = CANVAS_H;
+  const ctx = canvas.getContext('2d');
 
-  let page = null;
-  for (let i = 0; i < faces.length; i++) {
-    const idx = i % perPage;
-    if (idx === 0) page = pdf.addPage([PAGE_W, PAGE_H]);
+  let done = 0;
+  for (const face of faces) {
+    onProgress?.({ done, total: faces.length, code: face.code });
 
-    onProgress?.({ done: i, total: faces.length, code: faces[i].code });
-    let img;
-    try {
-      const bytes = await fetchImageBytes(faces[i].url);
-      img = await embedAuto(pdf, bytes);
-    } catch (err) {
-      // Skip a broken face but keep going.
-      continue;
-    }
+    const bytes = await fetchImageBytes(face.url);
+    const img = await loadImageFromBytes(bytes);
 
-    const col = idx % cols;
-    const row = Math.floor(idx / cols);
-    const cellX = CELL_PAD + col * (cellW + CELL_PAD);
-    // pdf-lib origin is bottom-left; lay rows top→down.
-    const cellY = PAGE_H - CELL_PAD - (row + 1) * cellH - row * CELL_PAD;
+    // 1. White background.
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, CANVAS_W, CANVAS_H);
+    // 2. Design centered at fixed footprint.
+    ctx.drawImage(img, DESIGN_X, DESIGN_Y, DESIGN_W, DESIGN_H);
+    // 3. Registration marks.
+    drawAlignmentMarks(ctx);
 
-    // Scale image to fit the cell preserving aspect ratio.
-    const scale = Math.min(cellW / img.width, cellH / img.height);
-    const w = img.width * scale;
-    const h = img.height * scale;
-    const x = cellX + (cellW - w) / 2;
-    const y = cellY + (cellH - h) / 2;
-    page.drawImage(img, { x, y, width: w, height: h });
+    // 4. Snapshot → embed as a full PDF page.
+    const blob = await canvasToBlob(canvas, 'image/png');
+    const pngBytes = new Uint8Array(await blob.arrayBuffer());
+    const pageImg = await pdf.embedPng(pngBytes);
+    const page = pdf.addPage([PAGE_W_PT, PAGE_H_PT]);
+    page.drawImage(pageImg, { x: 0, y: 0, width: PAGE_W_PT, height: PAGE_H_PT });
+
+    done++;
+    onProgress?.({ done, total: faces.length, code: face.code });
   }
-  onProgress?.({ done: faces.length, total: faces.length });
 
   const pdfBytes = await pdf.save();
   const blob = new Blob([pdfBytes], { type: 'application/pdf' });
