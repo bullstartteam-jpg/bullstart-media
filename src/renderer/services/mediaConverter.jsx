@@ -1,16 +1,30 @@
-import QRCode from 'qrcode';
+import bwipjs from 'bwip-js';
 import api from './api';
 import { uploadFileToB2 } from './uploadB2';
 
 // ---------------------------------------------------------------------------
-// Media _qr converter. Fetches designs that still need _qr, overlays a small
-// QR (encoding the design code) onto each uploaded face, uploads the result
-// to B2, and saves the URLs back. Runs in the renderer (needs canvas + the
-// Electron s3 bridge).
+// Media _qr converter. Mirrors bullstart's converter.composeImage: each design
+// face is drawn onto a 3000×2100 canvas (the gangsheet design footprint) with
+// a Code 128 barcode + code text panel stamped bottom-left, then exported as a
+// PNG at 300 DPI. Output feeds straight into the gangsheet builder.
 // ---------------------------------------------------------------------------
 
-function loadImage(url) {
-  return new Promise((resolve, reject) => {
+const TARGET_W = 3000;
+const TARGET_H = 2100;
+
+async function loadImage(url) {
+  // Use the Electron main process to fetch bytes (bypasses B2 CORS) when
+  // available; fall back to a direct <img> load in the browser.
+  if (window.electronAPI?.fetchImage) {
+    const { base64, contentType } = await window.electronAPI.fetchImage(url);
+    return await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = `data:${contentType || 'image/png'};base64,${base64}`;
+    });
+  }
+  return await new Promise((resolve, reject) => {
     const img = new Image();
     img.crossOrigin = 'anonymous';
     img.onload = () => resolve(img);
@@ -19,81 +33,92 @@ function loadImage(url) {
   });
 }
 
-function canvasToBlob(canvas, type = 'image/jpeg', quality = 0.95) {
+function canvasToBlob(canvas, type = 'image/png') {
   return new Promise((resolve, reject) => {
-    canvas.toBlob(b => (b ? resolve(b) : reject(new Error('toBlob failed'))), type, quality);
+    canvas.toBlob(b => (b ? resolve(b) : reject(new Error('toBlob null'))), type);
   });
 }
 
-async function generateQrCanvas(value, size = 160) {
+function generateBarcodeCanvas(value, scale = 3) {
   const c = document.createElement('canvas');
-  await QRCode.toCanvas(c, value, {
-    width: size, margin: 1, errorCorrectionLevel: 'M',
-    color: { dark: '#000000', light: '#FFFFFF' },
+  bwipjs.toCanvas(c, {
+    bcid: 'code128',
+    text: value,
+    scale,
+    height: 14,
+    includetext: false,
+    paddingwidth: 10,
+    paddingheight: 4,
   });
   return c;
 }
 
-// Overlay a QR + code text band at the bottom-left of a design image.
-async function composeQrFace(sourceUrl, code) {
+/**
+ * Compose one design face → 3000×2100 PNG with a Code 128 barcode + code
+ * text panel bottom-left. Portrait sources are rotated -90° to landscape so
+ * they fill the footprint, same as bullstart.
+ */
+async function composeFace(sourceUrl, code) {
   const img = await loadImage(sourceUrl);
-  const w = img.naturalWidth || img.width;
-  const h = img.naturalHeight || img.height;
+  const sourceW = img.naturalWidth || img.width;
+  const sourceH = img.naturalHeight || img.height;
+  const isPortrait = sourceW < sourceH;
 
   const canvas = document.createElement('canvas');
-  canvas.width = w; canvas.height = h;
+  canvas.width = TARGET_W;
+  canvas.height = TARGET_H;
   const ctx = canvas.getContext('2d');
-  ctx.drawImage(img, 0, 0, w, h);
 
-  const fontSize = Math.max(24, Math.round(w * 0.03));
-  const qrSize = Math.max(120, Math.round(w * 0.11));
-  const qr = await generateQrCanvas(code, qrSize);
+  if (isPortrait) {
+    ctx.save();
+    ctx.translate(TARGET_W / 2, TARGET_H / 2);
+    ctx.rotate(-Math.PI / 2);
+    ctx.drawImage(img, -TARGET_H / 2, -TARGET_W / 2, TARGET_H, TARGET_W);
+    ctx.restore();
+  } else {
+    ctx.drawImage(img, 0, 0, TARGET_W, TARGET_H);
+  }
 
-  const pad = Math.round(fontSize * 0.45);
-  const gap = Math.round(fontSize * 0.3);
-  ctx.font = `bold ${fontSize}px sans-serif`;
-  const textW = Math.ceil(ctx.measureText(code).width);
-  const innerW = Math.max(qr.width, textW);
-  const panelW = innerW + pad * 2;
-  const panelH = fontSize + gap + qr.height + pad * 2;
-  const margin = Math.round(fontSize * 0.5);
-  const px = margin, py = h - panelH - margin;
+  // Barcode + code text panel, bottom-left (matches bullstart constants).
+  const barcodeCanvas = generateBarcodeCanvas(code);
+  const MARGIN_X = 190, MARGIN_Y = 60, PANEL_PAD = 10;
+  const TEXT_H = 22, TEXT_TO_BAR = 6, BARCODE_W = 350, BARCODE_H = 130;
 
-  ctx.fillStyle = '#fff'; ctx.fillRect(px, py, panelW, panelH);
-  ctx.strokeStyle = '#000'; ctx.lineWidth = 2; ctx.strokeRect(px, py, panelW, panelH);
-  ctx.fillStyle = '#000'; ctx.textBaseline = 'top'; ctx.textAlign = 'left';
-  ctx.fillText(code, px + pad, py + pad);
-  ctx.drawImage(qr, px + pad, py + pad + fontSize + gap, qr.width, qr.height);
+  ctx.font = 'bold 18px sans-serif';
+  const innerW = Math.max(BARCODE_W, Math.ceil(ctx.measureText(code).width));
+  const panelW = innerW + PANEL_PAD * 2;
+  const panelH = TEXT_H + TEXT_TO_BAR + BARCODE_H + PANEL_PAD * 2;
+  const panelX = MARGIN_X;
+  const panelY = canvas.height - MARGIN_Y - panelH;
 
-  return await canvasToBlob(canvas, 'image/jpeg', 0.95);
+  ctx.fillStyle = '#000000';
+  ctx.textBaseline = 'top';
+  ctx.textAlign = 'center';
+  ctx.fillText(code, panelX + PANEL_PAD + BARCODE_W / 2, panelY + PANEL_PAD);
+  ctx.drawImage(barcodeCanvas, panelX + PANEL_PAD, panelY + PANEL_PAD + TEXT_H + TEXT_TO_BAR, BARCODE_W, BARCODE_H);
+
+  const rawBlob = await canvasToBlob(canvas, 'image/png');
+  return await setPngDpi(rawBlob, 300);
 }
 
-/**
- * Convert one design — build _qr for whichever faces (front/back) have an
- * uploaded image, upload them, and POST the URLs back.
- */
 export async function convertDesign(design, onStep) {
   const out = {};
   if (design.front_url) {
     onStep?.(`#${design.code}: building front _qr…`);
-    const blob = await composeQrFace(design.front_url, design.code);
-    const { url } = await uploadFileToB2(blob, { folder: `qr/${design.code}`, filename: `${design.code}_front_qr.jpg` });
+    const blob = await composeFace(design.front_url, design.code);
+    const { url } = await uploadFileToB2(blob, { folder: `qr/${design.code}`, filename: `${design.code}_front_qr.png` });
     out.front_qr = url;
   }
   if (design.back_url) {
     onStep?.(`#${design.code}: building back _qr…`);
-    const blob = await composeQrFace(design.back_url, design.code);
-    const { url } = await uploadFileToB2(blob, { folder: `qr/${design.code}`, filename: `${design.code}_back_qr.jpg` });
+    const blob = await composeFace(design.back_url, design.code);
+    const { url } = await uploadFileToB2(blob, { folder: `qr/${design.code}`, filename: `${design.code}_back_qr.png` });
     out.back_qr = url;
   }
   await api.post(`/designs/${design.id}/qr`, out);
   return out;
 }
 
-/**
- * Run a full convert pass over all pending designs. Returns a summary.
- * onProgress({ done, total, code, message }) for UI updates.
- */
 export async function runConvertPass(onProgress) {
   if (!window.electronAPI?.s3Upload) {
     throw new Error('Cần mở từ desktop app (Electron) để build _qr + upload B2.');
@@ -114,4 +139,62 @@ export async function runConvertPass(onProgress) {
     onProgress?.({ done, total: designs.length, code: d.code, message: '' });
   }
   return { total: designs.length, ok, failed, errors };
+}
+
+// --- PNG 300-DPI patch (pHYs chunk), copied from bullstart converter ---
+async function setPngDpi(blob, dpi = 300) {
+  const buf = new Uint8Array(await blob.arrayBuffer());
+  const SIG_LEN = 8;
+  const IHDR_END = SIG_LEN + 25;
+  const stripped = stripPhysChunk(buf);
+
+  const ppm = Math.round(dpi / 0.0254);
+  const phys = new Uint8Array(4 + 4 + 9 + 4);
+  phys[0] = 0; phys[1] = 0; phys[2] = 0; phys[3] = 9;
+  phys[4] = 0x70; phys[5] = 0x48; phys[6] = 0x59; phys[7] = 0x73;
+  const dv = new DataView(phys.buffer);
+  dv.setUint32(8, ppm, false);
+  dv.setUint32(12, ppm, false);
+  phys[16] = 1;
+  const crc = crc32(phys.subarray(4, 17));
+  dv.setUint32(17, crc, false);
+
+  const out = new Uint8Array(stripped.length + phys.length);
+  out.set(stripped.subarray(0, IHDR_END), 0);
+  out.set(phys, IHDR_END);
+  out.set(stripped.subarray(IHDR_END), IHDR_END + phys.length);
+  return new Blob([out], { type: 'image/png' });
+}
+
+function stripPhysChunk(buf) {
+  let i = 8;
+  while (i < buf.length) {
+    const len = (buf[i] << 24) | (buf[i + 1] << 16) | (buf[i + 2] << 8) | buf[i + 3];
+    const type = String.fromCharCode(buf[i + 4], buf[i + 5], buf[i + 6], buf[i + 7]);
+    const total = 4 + 4 + len + 4;
+    if (type === 'pHYs') {
+      const out = new Uint8Array(buf.length - total);
+      out.set(buf.subarray(0, i), 0);
+      out.set(buf.subarray(i + total), i);
+      return out;
+    }
+    if (type === 'IEND') break;
+    i += total;
+  }
+  return buf;
+}
+
+let _crcTable = null;
+function crc32(bytes) {
+  if (!_crcTable) {
+    _crcTable = new Uint32Array(256);
+    for (let n = 0; n < 256; n++) {
+      let c = n;
+      for (let k = 0; k < 8; k++) c = (c & 1) ? (0xEDB88320 ^ (c >>> 1)) : (c >>> 1);
+      _crcTable[n] = c >>> 0;
+    }
+  }
+  let crc = 0xFFFFFFFF;
+  for (let i = 0; i < bytes.length; i++) crc = (_crcTable[(crc ^ bytes[i]) & 0xFF] ^ (crc >>> 8)) >>> 0;
+  return (crc ^ 0xFFFFFFFF) >>> 0;
 }
