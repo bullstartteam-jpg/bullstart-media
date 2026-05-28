@@ -158,10 +158,10 @@ function ManageTab({ isAdmin }) {
           <thead>
             <tr className="text-neutral-500 text-xs border-b border-neutral-200 bg-[#faf8f6]">
               <th className="px-3 py-2 text-left">Filename</th>
+              <th className="px-3 py-2 text-left">PDF link</th>
               <th className="px-3 py-2 text-left">Range</th>
               <th className="px-3 py-2 text-right">Designs</th>
               <th className="px-3 py-2 text-right">Faces</th>
-              <th className="px-3 py-2 text-left">By</th>
               <th className="px-3 py-2 text-left">When</th>
               <th className="px-3 py-2 text-right">Actions</th>
             </tr>
@@ -173,15 +173,24 @@ function ManageTab({ isAdmin }) {
               <tr><td colSpan={7} className="p-6 text-center text-neutral-400">Chưa có gangsheet nào.</td></tr>
             ) : list.data.map(g => (
               <tr key={g.id} className="border-b border-neutral-100 hover:bg-orange-50/30">
-                <td className="px-3 py-1.5 font-mono text-xs text-neutral-700 truncate max-w-[280px]">{g.filename}</td>
+                <td className="px-3 py-1.5 font-mono text-xs text-neutral-700 truncate max-w-[220px]">{g.filename}</td>
+                <td className="px-3 py-1.5">
+                  <div className="flex items-center gap-2 max-w-[340px]">
+                    <a href={g.file_url} target="_blank" rel="noreferrer" className="text-xs text-blue-600 hover:underline truncate" title={g.file_url}>{g.file_url}</a>
+                    <button
+                      onClick={() => { navigator.clipboard?.writeText(g.file_url); notify('Đã copy link', { title: 'PDF link', kind: 'success' }); }}
+                      className="shrink-0 text-[11px] px-2 py-0.5 bg-neutral-100 hover:bg-neutral-200 text-neutral-600 rounded"
+                      title="Copy link"
+                    >Copy</button>
+                  </div>
+                </td>
                 <td className="px-3 py-1.5 font-mono text-xs text-neutral-500">{g.first_code}{g.first_code !== g.last_code && <> → {g.last_code}</>}</td>
                 <td className="px-3 py-1.5 text-right">{g.designs_count}</td>
                 <td className="px-3 py-1.5 text-right">{g.sides_count}</td>
-                <td className="px-3 py-1.5 text-xs">{g.creator?.name || '-'}</td>
                 <td className="px-3 py-1.5 text-xs text-neutral-500">{new Date(g.created_at).toLocaleString()}</td>
                 <td className="px-3 py-1.5 text-right">
                   <div className="flex gap-3 justify-end">
-                    <a href={g.file_url} target="_blank" rel="noreferrer" className="text-xs text-orange-500 hover:text-orange-600">Download</a>
+                    <a href={g.file_url} target="_blank" rel="noreferrer" className="text-xs text-orange-500 hover:text-orange-600">Open</a>
                     {isAdmin && <button onClick={() => handleDelete(g)} className="text-xs text-red-500 hover:text-red-600">Delete</button>}
                   </div>
                 </td>
