@@ -27,7 +27,8 @@ export default function Layout() {
     if (item.requiresStaff && !isStaff) return false;
     if (item.requiresConvert && !user?.convert) return false;
     if (item.requiresStaff || item.requiresConvert) return true;
-    return hasPermission(item.module);
+    // Items without a module gate (e.g. Design) are always visible.
+    return item.module ? hasPermission(item.module) : true;
   });
 
   return (
