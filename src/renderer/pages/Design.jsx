@@ -29,7 +29,6 @@ export default function Design() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
-    if (!form.code.trim()) return notify('Nhập code cho design', { title: 'Design', kind: 'error' });
     if (!form.front_url && !form.back_url) return notify('Cần ít nhất 1 ảnh (front hoặc back)', { title: 'Design', kind: 'error' });
     setSaving(true);
     try {
@@ -68,8 +67,8 @@ export default function Design() {
       <form onSubmit={handleSubmit} className="bg-white rounded-xl border border-neutral-200 p-4 shadow-sm space-y-3 max-w-2xl">
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className="text-xs text-neutral-500">Code <span className="text-red-500">*</span></label>
-            <input value={form.code} onChange={e => setForm(f => ({ ...f, code: e.target.value }))} placeholder="vd D-001 / ref nội bộ" className="w-full mt-1 px-3 py-2 bg-[#faf8f6] border border-neutral-200 rounded-lg text-sm" />
+            <label className="text-xs text-neutral-500">Code <span className="text-neutral-400">(để trống = tự sinh)</span></label>
+            <input value={form.code} onChange={e => setForm(f => ({ ...f, code: e.target.value }))} placeholder="auto: DM2605280001" className="w-full mt-1 px-3 py-2 bg-[#faf8f6] border border-neutral-200 rounded-lg text-sm" />
           </div>
           <div>
             <label className="text-xs text-neutral-500">Name</label>
