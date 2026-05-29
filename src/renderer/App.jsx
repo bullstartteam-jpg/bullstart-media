@@ -5,6 +5,7 @@ import Login from './pages/Login';
 import Design from './pages/Design';
 import Convert from './pages/Convert';
 import Gangsheet from './pages/Gangsheet';
+import Media from './pages/Media';
 import Profile from './pages/Profile';
 import { DialogHost } from './components/Dialog';
 
@@ -24,6 +25,7 @@ export default function App() {
           <Route index element={<Design />} />
           <Route path="convert" element={<Convert />} />
           <Route path="gangsheet" element={<Gangsheet />} />
+          <Route path="media" element={<Media />} />
           <Route path="profile" element={<Profile />} />
         </Route>
       </Routes>

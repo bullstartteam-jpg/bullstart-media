@@ -8,6 +8,7 @@ const navItems = [
   { path: '/', label: 'Design', icon: '🎨' },
   { path: '/convert', label: 'Convert _qr', icon: '⟲', requiresConvert: true },
   { path: '/gangsheet', label: 'Gangsheet', icon: '▦', requiresStaff: true },
+  { path: '/media', label: 'Media', icon: '🎬' },
 ];
 
 export default function Layout() {
